@@ -1,6 +1,6 @@
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
-import { Effect, LogicalSize, getCurrentWindow } from '@tauri-apps/api/window';
+import { LogicalSize, getCurrentWindow } from '@tauri-apps/api/window';
 import { search, type Program } from './search';
 import { parsePreferences, preferencesKey } from './preferences';
 import './styles.css';
@@ -27,8 +27,7 @@ async function applyGlass() {
   document.documentElement.classList.toggle('no-blur', !preferences.blur);
   if (!native) return;
   try {
-    const material = {acrylic: Effect.Acrylic, blur: Effect.Blur, mica: Effect.Mica}[preferences.material];
-    await getCurrentWindow().setEffects({ effects: preferences.blur ? [material] : [] });
+    await invoke('set_glass',{material:preferences.blur?preferences.material:'none',dark:theme==='dark'});
     await invoke('set_rounding', { radius: preferences.radius });
     document.documentElement.classList.remove('solid-fallback');
   } catch { document.documentElement.classList.add('solid-fallback'); }
@@ -64,10 +63,10 @@ if (settings) {
   root.innerHTML = `<main class="settings glass">
     <header data-tauri-drag-region><h1 data-tauri-drag-region>настройки</h1><button id="close-settings" class="icon-button" aria-label="закрыть настройки">${svg('<path d="m7 7 10 10M17 7 7 17"/>')}</button></header>
     <label class="setting-row"><span>матовое стекло</span><input id="blur" type="checkbox" role="switch"/><span class="switch" aria-hidden="true"></span></label>
-    <label class="slider-label" for="material"><span>материал</span><select id="material"><option value="acrylic">матовый акрил</option><option value="blur">мягкое стекло</option><option value="mica">слюда</option></select></label>
+    <label class="slider-label" for="material"><span>материал</span><select id="material"><option value="acrylic">матовый акрил</option><option value="blur">мягкое стекло</option><option value="frosted">плотный акрил</option></select></label>
     <label class="slider-label" for="density"><span>плотность стекла</span><output id="density-value"></output></label>
     <input id="density" type="range" min="0" max="100"/>
-    <p>акрил и мягкое стекло размывают окна позади. слюда подхватывает оттенок обоев. плотность меняет заливку.</p>
+    <p>мягкое стекло сохраняет больше фона, акрил сильнее его приглушает. плотность меняет заливку поверх размытия.</p>
     <label class="slider-label" for="radius"><span>округлость окна</span><output id="radius-value"></output></label>
     <input id="radius" type="range" min="0" max="40"/>
     <label class="slider-label" for="rows"><span>программ в списке</span><output id="rows-value"></output></label>

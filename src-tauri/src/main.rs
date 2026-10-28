@@ -169,6 +169,96 @@ fn configure_frame(window: &tauri::WebviewWindow) {
     }
 }
 
+#[tauri::command]
+fn set_glass(window: tauri::Window, material: String, dark: bool) -> Result<(), String> {
+    use std::ffi::c_void;
+    #[repr(C)]
+    struct AccentPolicy {
+        state: u32,
+        flags: u32,
+        color: u32,
+        animation: u32,
+    }
+    #[repr(C)]
+    struct CompositionData {
+        attribute: u32,
+        data: *mut c_void,
+        size: usize,
+    }
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetWindowLongPtrW(hwnd: isize, index: i32) -> isize;
+        fn SetWindowLongPtrW(hwnd: isize, index: i32, value: isize) -> isize;
+        fn SetWindowPos(
+            hwnd: isize,
+            after: isize,
+            x: i32,
+            y: i32,
+            width: i32,
+            height: i32,
+            flags: u32,
+        ) -> i32;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetModuleHandleA(name: *const u8) -> isize;
+        fn GetProcAddress(module: isize, name: *const u8) -> *mut c_void;
+    }
+    #[link(name = "dwmapi")]
+    extern "system" {
+        fn DwmSetWindowAttribute(hwnd: isize, attribute: u32, value: *const i32, size: u32) -> i32;
+    }
+    let state = match material.as_str() {
+        "none" => 0,
+        "blur" => 3,
+        "acrylic" | "frosted" => 4,
+        _ => return Err("неизвестный материал".into()),
+    };
+    let hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
+    // System backdrops stop composing custom window regions. Accent blur supports those regions.
+    let alpha = if material == "frosted" {
+        220
+    } else if material == "acrylic" {
+        145
+    } else {
+        45
+    };
+    let tint = if dark { 0x00121010 } else { 0x00f6f8f9 };
+    let mut policy = AccentPolicy {
+        state,
+        flags: 0,
+        color: (alpha << 24) | tint,
+        animation: 0,
+    };
+    let mut data = CompositionData {
+        attribute: 19,
+        data: &mut policy as *mut _ as *mut c_void,
+        size: std::mem::size_of::<AccentPolicy>(),
+    };
+    unsafe {
+        DwmSetWindowAttribute(hwnd, 38, &1, 4);
+        let style = GetWindowLongPtrW(hwnd, -16);
+        let borderless = (style & !0x00cf0000isize) | 0x80000000u32 as isize;
+        if style != borderless {
+            SetWindowLongPtrW(hwnd, -16, borderless);
+            SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x37);
+        }
+        let address = GetProcAddress(
+            GetModuleHandleA(b"user32.dll\0".as_ptr()),
+            b"SetWindowCompositionAttribute\0".as_ptr(),
+        );
+        if address.is_null() {
+            return Err("системное размытие недоступно".into());
+        }
+        let apply: unsafe extern "system" fn(isize, *mut CompositionData) -> i32 =
+            std::mem::transmute(address);
+        if apply(hwnd, &mut data) == 0 {
+            return Err("windows не применила размытие".into());
+        }
+    }
+    Ok(())
+}
+
 fn round_window(window: &tauri::Window, radius: u32) -> Result<(), String> {
     #[link(name = "gdi32")]
     extern "system" {
@@ -421,6 +511,7 @@ fn main() {
             background_start,
             get_startup,
             set_startup,
+            set_glass,
             reserve_update,
             release_update
         ])
