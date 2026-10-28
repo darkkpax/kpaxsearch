@@ -4,7 +4,7 @@ using System;
 using System.Text;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
-public class WindowResult { public string title; public int clientX; public int clientY; public bool corner; public bool nearCorner; }
+public class WindowResult { public string title; public int clientX; public int clientY; public bool hardClip; public int regionKind; }
 public static class Probe {
     delegate bool Callback(IntPtr w,IntPtr data);
     [StructLayout(LayoutKind.Sequential)] struct Rect { public int left,top,right,bottom; }
@@ -23,8 +23,8 @@ public static class Probe {
             var title=new StringBuilder(256);GetWindowText(w,title,256);
             if(!title.ToString().EndsWith("kpax search"))return true;
             Rect rect;GetWindowRect(w,out rect);var origin=new Point();ClientToScreen(w,ref origin);
-            var region=CreateRectRgn(0,0,0,0);GetWindowRgn(w,region);
-            results.Add(new WindowResult {title=title.ToString(),clientX=origin.x-rect.left,clientY=origin.y-rect.top,corner=PtInRegion(region,1,1),nearCorner=PtInRegion(region,15,1)});
+            var region=CreateRectRgn(0,0,0,0);int kind=GetWindowRgn(w,region);
+            results.Add(new WindowResult {title=title.ToString(),clientX=origin.x-rect.left,clientY=origin.y-rect.top,hardClip=kind==3,regionKind=kind});
             DeleteObject(region);return true;
         },IntPtr.Zero);return results;
     }

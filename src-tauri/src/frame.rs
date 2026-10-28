@@ -1,4 +1,8 @@
-use std::{cell::Cell, ffi::c_void, sync::mpsc};
+use crate::backdrop::Backdrop;
+use std::{
+    cell::{Cell, RefCell},
+    sync::mpsc,
+};
 
 const SUBCLASS_ID: usize = 0x4b504158;
 type Proc = unsafe extern "system" fn(isize, u32, usize, isize, usize, usize) -> isize;
@@ -9,23 +13,11 @@ struct Rect {
     right: i32,
     bottom: i32,
 }
-#[repr(C)]
-struct Accent {
-    state: u32,
-    flags: u32,
-    color: u32,
-    animation: u32,
-}
-#[repr(C)]
-struct Composition {
-    attribute: u32,
-    data: *mut c_void,
-    size: usize,
-}
 struct Frame {
     radius: Cell<u32>,
     applying: Cell<bool>,
     size: Cell<(i32, i32, i32)>,
+    backdrop: RefCell<Option<Backdrop>>,
 }
 
 #[link(name = "comctl32")]
@@ -52,26 +44,9 @@ extern "system" {
         flags: u32,
     ) -> i32;
 }
-#[link(name = "gdi32")]
-extern "system" {
-    fn CreateRoundRectRgn(
-        left: i32,
-        top: i32,
-        right: i32,
-        bottom: i32,
-        width: i32,
-        height: i32,
-    ) -> isize;
-    fn DeleteObject(object: isize) -> i32;
-}
 #[link(name = "dwmapi")]
 extern "system" {
     fn DwmSetWindowAttribute(window: isize, attribute: u32, value: *const i32, size: u32) -> i32;
-}
-#[link(name = "kernel32")]
-extern "system" {
-    fn GetModuleHandleA(name: *const u8) -> isize;
-    fn GetProcAddress(module: isize, name: *const u8) -> *mut c_void;
 }
 
 fn diameter(radius: u32, dpi: u32, width: i32, height: i32) -> i32 {
@@ -101,18 +76,14 @@ unsafe fn clip(window: isize, frame: &Frame, force: bool) -> Result<(), String> 
     if !force && frame.size.get() == key {
         return Ok(());
     }
-    let region = CreateRoundRectRgn(0, 0, width, height, rounding, rounding);
-    if region == 0 {
-        return Err("не удалось создать форму окна".into());
-    }
     frame.applying.set(true);
     frame.size.set(key);
-    let result = SetWindowRgn(window, region, 1);
-    frame.applying.set(false);
-    if result == 0 {
-        DeleteObject(region);
-        return Err("не удалось применить форму окна".into());
+    // Only composition clips the pixels: an HRGN edge is binary and visibly jagged.
+    SetWindowRgn(window, 0, 1);
+    if let Some(backdrop) = frame.backdrop.borrow().as_ref() {
+        let _ = backdrop.resize(width, height, rounding);
     }
+    frame.applying.set(false);
     Ok(())
 }
 
@@ -147,6 +118,7 @@ unsafe fn ensure(window: isize) -> Result<&'static Frame, String> {
             radius: Cell::new(16),
             applying: Cell::new(false),
             size: Cell::new((0, 0, 0)),
+            backdrop: RefCell::new(None),
         })) as usize;
         if SetWindowSubclass(window, procedure, SUBCLASS_ID, data) == 0 {
             drop(Box::from_raw(data as *mut Frame));
@@ -190,48 +162,34 @@ pub fn set_glass(
 ) -> Result<(), String> {
     on_ui(window, move |handle| unsafe {
         let frame = ensure(handle)?;
-        let state = match material.as_str() {
-            "none" => 0,
-            "blur" => 3,
-            "acrylic" | "frosted" => 4,
-            _ => return Err("неизвестный материал".into()),
-        };
+        if !matches!(material.as_str(), "none" | "blur" | "acrylic" | "frosted") {
+            return Err("неизвестный материал".into());
+        }
         DwmSetWindowAttribute(handle, 38, &1, 4);
+        DwmSetWindowAttribute(handle, 17, &1, 4);
         let style = GetWindowLongPtrW(handle, -16);
         let borderless = (style & !0x00cf0000isize) | 0x80000000u32 as isize;
         if style != borderless {
             SetWindowLongPtrW(handle, -16, borderless);
             SetWindowPos(handle, 0, 0, 0, 0, 0, 0x37);
         }
-        let opacity = match material.as_str() {
-            "blur" => 30 + density.min(100) * 130 / 100,
-            "frosted" => 170 + density.min(100) * 70 / 100,
-            _ => 75 + density.min(100) * 140 / 100,
-        };
-        let tint = if dark { 0x001c1918 } else { 0x00f8fafb };
-        let mut accent = Accent {
-            state,
-            flags: if state == 3 { 2 } else { 0 },
-            color: (opacity << 24) | tint,
-            animation: 0,
-        };
-        let mut data = Composition {
-            attribute: 19,
-            data: &mut accent as *mut _ as *mut c_void,
-            size: std::mem::size_of::<Accent>(),
-        };
-        let address = GetProcAddress(
-            GetModuleHandleA(b"user32.dll\0".as_ptr()),
-            b"SetWindowCompositionAttribute\0".as_ptr(),
-        );
-        if address.is_null() {
-            return Err("системное размытие недоступно".into());
+        let extended = GetWindowLongPtrW(handle, -20);
+        if extended & 0x00200000 == 0 {
+            SetWindowLongPtrW(handle, -20, extended | 0x00200000);
+            SetWindowPos(handle, 0, 0, 0, 0, 0, 0x37);
         }
-        let apply: unsafe extern "system" fn(isize, *mut Composition) -> i32 =
-            std::mem::transmute(address);
-        if apply(handle, &mut data) == 0 {
-            return Err("windows не применила размытие".into());
+        if frame.backdrop.borrow().is_none() {
+            frame.backdrop.replace(Some(
+                Backdrop::new(handle).map_err(|e| format!("не удалось создать стекло: {e}"))?,
+            ));
         }
+        frame
+            .backdrop
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .appearance(&material, dark, density)
+            .map_err(|e| e.to_string())?;
         clip(handle, frame, true)
     })
 }

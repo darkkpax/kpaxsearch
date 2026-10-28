@@ -2019,7 +2019,7 @@ dependencies = [
 
 [[package]]
 name = "kpaxsearch"
-version = "0.2.2"
+version = "0.2.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -2029,6 +2029,8 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "windows",
+ "windows-numerics",
 ]
 
 [[package]]

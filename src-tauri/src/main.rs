@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod backdrop;
 mod frame;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -210,11 +211,11 @@ async fn open_settings(app: tauri::AppHandle) -> Result<(), String> {
         tauri::WebviewUrl::App("index.html?settings".into()),
     )
     .title("настройки kpax search")
-    .inner_size(420., 640.)
+    .inner_size(460., 640.)
     .resizable(false)
     .decorations(false)
     .transparent(true)
-    .shadow(true)
+    .shadow(false)
     .center()
     .visible(false)
     .build()

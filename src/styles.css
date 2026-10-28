@@ -10,8 +10,8 @@ button:disabled { cursor:default; opacity:.5; }
 button:focus-visible { outline:2px solid var(--muted); outline-offset:2px; }
 svg { width:20px; height:20px; flex-shrink:0; pointer-events:none; }
 [hidden] { display:none!important; }
-/* DWM owns the outer corners and frame; a second CSS outline caused doubled edges. */
-.glass { height:100%; border-radius:var(--radius,16px); background:rgb(var(--tint) / var(--density)); overflow:hidden; }
+/* The webview follows the same GPU-rounded bounds as the native backdrop. */
+.glass { height:100%; border-radius:var(--radius,24px); background:transparent; overflow:hidden; box-shadow:inset 0 0 0 1px var(--line); }
 .solid-fallback .glass,.no-blur .glass { background:var(--solid); }
 .launcher { display:flex; flex-direction:column; }
 .searchbox { display:flex; align-items:center; gap:13px; height:56px; flex-shrink:0; padding:0 19px; }
@@ -29,13 +29,25 @@ svg { width:20px; height:20px; flex-shrink:0; pointer-events:none; }
 .app-name { min-width:0; font-size:13px; font-weight:600; white-space:nowrap; text-overflow:ellipsis; overflow:hidden; }
 .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 .opening #results { animation:arrive .16s cubic-bezier(.22,1,.36,1) both; }
-.settings { padding:22px 25px; overflow-y:auto; scrollbar-width:thin; scrollbar-color:var(--line) transparent; }
+.settings { font-family:'Segoe UI Variable Text','Segoe UI',sans-serif; padding:25px 28px; overflow-y:auto; scrollbar-width:thin; scrollbar-color:var(--line) transparent; }
+.setting-group { padding:17px 18px 8px; margin-bottom:13px; border-radius:17px; background:rgb(var(--tint) / .13); box-shadow:inset 0 0 0 1px var(--line); }
+.material-picker { display:flex; gap:3px; border-radius:11px; padding:3px; background:rgb(var(--tint) / .2); margin-bottom:23px; }
+.material-picker button { flex:1; border:0; border-radius:8px; background:transparent; color:var(--muted); font-size:11px; padding:8px 4px; }
+.material-picker button.active { color:var(--ink); background:var(--selected); }
+.setting-group .setting-row { margin-bottom:14px; }
+.setting-group .slider-label { margin-bottom:8px; }
+.setting-group input[type='range'] { margin:8px 0 18px; }
+.setting-group input[type='range']:last-child { margin-bottom:4px; }
+.setting-group .startup { margin:8px 0 2px; }
+.settings #status:empty { display:none; }
+.updates .slider-label { margin-bottom:8px; }
+.settings .updates p { margin-bottom:8px; }
 .updates { margin-top:20px; padding-top:20px; border-top:1px solid var(--line); }
 .updates p { margin-bottom:12px; }
 .startup { margin-top:24px; }
 select { font:inherit; color:inherit; background:var(--solid); border:0; border-radius:8px; padding:8px 10px; font-size:11px; }
 #version { font-size:10px; color:var(--muted); }
-.settings header { display:flex; align-items:center; justify-content:space-between; margin-bottom:25px; }
+.settings header { display:flex; align-items:center; justify-content:space-between; margin-bottom:19px; }
 h1 { margin:0; font-size:19px; font-weight:650; letter-spacing:-.5px; }
 .icon-button { display:flex; align-items:center; justify-content:center; width:28px; height:28px; border:0; border-radius:8px; background:transparent; color:var(--muted); }
 .icon-button:hover,.text-button:hover { background:var(--selected); }
@@ -49,7 +61,8 @@ h1 { margin:0; font-size:19px; font-weight:650; letter-spacing:-.5px; }
 .setting-row input:focus-visible+.switch { outline:2px solid var(--muted); outline-offset:3px; }
 .slider-label { display:flex; justify-content:space-between; align-items:center; font-size:12px; margin-bottom:13px; }
 output { font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums; }
-input[type='range'] { width:100%; height:4px; margin:0 0 13px; accent-color:var(--ink); cursor:pointer; }
+input[type='range'] { appearance:none; display:block; width:100%; height:3px; margin:14px 0 24px; background:var(--line); border-radius:3px; cursor:pointer; }
+input[type='range']::-webkit-slider-thumb { appearance:none; width:14px; height:14px; border-radius:50%; background:var(--ink); box-shadow:0 1px 5px #0003; }
 .settings p { color:var(--muted); font-size:11px; line-height:1.6; margin:0 0 25px; }
 .settings-note { font-size:11px; line-height:1.8; color:var(--muted); margin:13px 0 21px; }
 .settings-bottom { display:flex; align-items:center; justify-content:space-between; gap:10px; border-top:1px solid var(--line); padding-top:16px; }

@@ -22,8 +22,7 @@ let theme = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dar
 
 async function applyGlass() {
   document.documentElement.dataset.theme = theme;
-  // Acrylic supplies the blurred material; only a light tint belongs above it.
-  document.documentElement.style.setProperty('--density', String(.03 + preferences.density * .002));
+  // The compositor draws and clips both blur and tint; the webview only draws the controls.
   document.documentElement.style.setProperty('--radius', `${preferences.radius}px`);
   document.documentElement.classList.toggle('no-blur', !preferences.blur);
   if (!native) return;
@@ -31,7 +30,7 @@ async function applyGlass() {
     await invoke('set_glass',{material:preferences.blur?preferences.material:'none',dark:theme==='dark',density:preferences.density});
     await invoke('set_rounding', { radius: preferences.radius });
     document.documentElement.classList.remove('solid-fallback');
-  } catch { document.documentElement.classList.add('solid-fallback'); }
+  } catch (error) { document.documentElement.classList.add('solid-fallback'); const status=document.getElementById('status');if(status)status.textContent=String(error); }
 }
 
 async function initializeAppearance() {
@@ -40,6 +39,7 @@ async function initializeAppearance() {
     await window.setTheme(null);
     theme = await window.theme() ?? theme;
     await window.onThemeChanged(event => { theme = event.payload; void applyGlass(); });
+    await window.onFocusChanged(() => { void applyGlass(); });
     await listen<Preferences>('appearance-changed', event => {
       preferences = parsePreferences(JSON.stringify(event.payload));
       save(preferencesKey,JSON.stringify(preferences));
@@ -64,28 +64,30 @@ const root = document.querySelector<HTMLDivElement>('#app')!;
 if (settings) {
   root.innerHTML = `<main class="settings glass">
     <header data-tauri-drag-region><h1 data-tauri-drag-region>настройки</h1><button id="close-settings" class="icon-button" aria-label="закрыть настройки">${svg('<path d="m7 7 10 10M17 7 7 17"/>')}</button></header>
-    <label class="setting-row"><span>матовое стекло</span><input id="blur" type="checkbox" role="switch"/><span class="switch" aria-hidden="true"></span></label>
-    <label class="slider-label" for="material"><span>материал</span><select id="material"><option value="acrylic">матовый акрил</option><option value="blur">мягкое стекло</option><option value="frosted">плотный акрил</option></select></label>
+    <div class="setting-group"><label class="setting-row"><span>стекло</span><input id="blur" type="checkbox" role="switch"/><span class="switch" aria-hidden="true"></span></label>
+    <select id="material" hidden><option value="blur">воздушное</option><option value="acrylic">матовое</option><option value="frosted">плотное</option></select>
+    <div class="material-picker" role="group" aria-label="вид стекла"><button data-material="blur">воздушное</button><button data-material="acrylic">матовое</button><button data-material="frosted">плотное</button></div>
     <label class="slider-label" for="density"><span>плотность стекла</span><output id="density-value"></output></label>
     <input id="density" type="range" min="0" max="100"/>
-    <p>мягкое стекло сохраняет больше фона, акрил сильнее его приглушает. плотность меняет заливку поверх размытия.</p>
     <label class="slider-label" for="radius"><span>округлость окна</span><output id="radius-value"></output></label>
-    <input id="radius" type="range" min="0" max="40"/>
+    <input id="radius" type="range" min="0" max="40"/></div>
+    <div class="setting-group">
     <label class="slider-label" for="rows"><span>программ в списке</span><output id="rows-value"></output></label>
     <input id="rows" type="range" min="4" max="10"/>
     <label class="setting-row startup"><span>запускать вместе с windows</span><input id="startup" type="checkbox" role="switch"/><span class="switch" aria-hidden="true"></span></label>
-    <div class="settings-note">тема меняется вместе с windows.<br/>частые программы определяются по запускам через поиск.</div>
+    </div>
     <div class="settings-bottom"><button id="refresh" class="text-button">обновить программы</button><span id="shortcut"></span></div>
     <p id="status" role="status"></p>
-    <div class="updates"><div class="slider-label"><span>обновления</span><span id="version"></span></div><p id="update-status" role="status"></p><button id="update" class="text-button">проверить и установить</button></div>
+    <div class="updates"><div class="slider-label"><span>обновления</span><span id="version"></span></div><p id="update-status" role="status"></p><button id="update" class="text-button">проверить обновления</button></div>
   </main>`;
   $<HTMLInputElement>('blur').checked = preferences.blur;
   $<HTMLInputElement>('density').value = String(preferences.density);
   $<HTMLInputElement>('rows').value = String(preferences.rows);
   $<HTMLInputElement>('radius').value = String(preferences.radius);
   $<HTMLSelectElement>('material').value = preferences.material;
-  function values() { $('density-value').textContent = `${preferences.density}%`; $('rows-value').textContent = String(preferences.rows); $('radius-value').textContent = `${preferences.radius} px`; }
+  function values() { $('density-value').textContent = `${preferences.density}%`; $('rows-value').textContent = String(preferences.rows); $('radius-value').textContent = `${preferences.radius} px`;for(const button of document.querySelectorAll<HTMLButtonElement>('[data-material]')){button.classList.toggle('active',button.dataset.material===preferences.material);button.setAttribute('aria-pressed',String(button.dataset.material===preferences.material));} }
   values();
+  for(const button of document.querySelectorAll<HTMLButtonElement>('[data-material]'))button.addEventListener('click',()=>{$<HTMLSelectElement>('material').value=button.dataset.material!;$('material').dispatchEvent(new Event('input',{bubbles:true}));});
   for (const id of ['blur', 'density', 'rows','radius','material']) $(id).addEventListener('input', () => {
     preferences = parsePreferences(JSON.stringify({ blur: $<HTMLInputElement>('blur').checked, density: Number($<HTMLInputElement>('density').value), rows: Number($<HTMLInputElement>('rows').value),radius:Number($<HTMLInputElement>('radius').value),material:$<HTMLSelectElement>('material').value }));
     save(preferencesKey, JSON.stringify(preferences)); values();

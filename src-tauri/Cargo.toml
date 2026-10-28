@@ -1,6 +1,6 @@
 [package]
 name = "kpaxsearch"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 
 [build-dependencies]
@@ -14,11 +14,14 @@ tauri-plugin-updater = "2"
 tauri-plugin-autostart = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+windows = { version = "0.62.2", features = ["UI_Composition", "UI_Composition_Desktop", "System", "Win32_System_WinRT", "Win32_System_WinRT_Composition"] }
+windows-numerics = "0.3.1"
 
 [profile.release]
 strip = true
 lto = true
 codegen-units = 1
+
 
 
 
