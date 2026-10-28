@@ -63,3 +63,7 @@ node scripts/benchmark.mjs "$env:LOCALAPPDATA/com.kpax.search/programs.json"
 ```
 
 nunito sans взят из локального edithub; лицензия sil open font license находится в `src/assets/fonts/`. fluent search — функциональный ориентир, его исходный код здесь не используется.
+
+## проверка нативного окна
+
+для проверки регрессий рамки запусти тестовую сборку отдельно с переменной `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9227`, затем `npm run test:desktop`. проверка меняет параметры оформления: измеряет фактическую клиентскую область обоих окон и обрезку углов после изменения размера, повторного показа и смены темы. одних ответов ipc и сохранённых значений настроек для этой проверки недостаточно.

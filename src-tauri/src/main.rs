@@ -1,12 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod frame;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
     path::PathBuf,
     process::Command,
     sync::{
-        atomic::{AtomicBool, AtomicU32, Ordering},
+        atomic::{AtomicBool, Ordering},
         Mutex,
     },
 };
@@ -28,7 +29,6 @@ struct Catalog {
     programs: Mutex<Vec<Program>>,
     shortcut: Mutex<String>,
     refresh: Mutex<()>,
-    radius: AtomicU32,
     updating: AtomicBool,
 }
 
@@ -155,158 +155,6 @@ fn reveal(app: &tauri::AppHandle) {
     }
 }
 
-fn configure_frame(window: &tauri::WebviewWindow) {
-    #[link(name = "dwmapi")]
-    extern "system" {
-        fn DwmSetWindowAttribute(hwnd: isize, attribute: u32, value: *const i32, size: u32) -> i32;
-    }
-    if let Ok(hwnd) = window.hwnd() {
-        unsafe {
-            DwmSetWindowAttribute(hwnd.0 as isize, 33, &1, 4);
-            // DWMWA_COLOR_NONE removes the extra system outline, retaining the shadow.
-            DwmSetWindowAttribute(hwnd.0 as isize, 34, &-2, 4);
-        }
-    }
-}
-
-#[tauri::command]
-fn set_glass(window: tauri::Window, material: String, dark: bool) -> Result<(), String> {
-    use std::ffi::c_void;
-    #[repr(C)]
-    struct AccentPolicy {
-        state: u32,
-        flags: u32,
-        color: u32,
-        animation: u32,
-    }
-    #[repr(C)]
-    struct CompositionData {
-        attribute: u32,
-        data: *mut c_void,
-        size: usize,
-    }
-    #[link(name = "user32")]
-    extern "system" {
-        fn GetWindowLongPtrW(hwnd: isize, index: i32) -> isize;
-        fn SetWindowLongPtrW(hwnd: isize, index: i32, value: isize) -> isize;
-        fn SetWindowPos(
-            hwnd: isize,
-            after: isize,
-            x: i32,
-            y: i32,
-            width: i32,
-            height: i32,
-            flags: u32,
-        ) -> i32;
-    }
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn GetModuleHandleA(name: *const u8) -> isize;
-        fn GetProcAddress(module: isize, name: *const u8) -> *mut c_void;
-    }
-    #[link(name = "dwmapi")]
-    extern "system" {
-        fn DwmSetWindowAttribute(hwnd: isize, attribute: u32, value: *const i32, size: u32) -> i32;
-    }
-    let state = match material.as_str() {
-        "none" => 0,
-        "blur" => 3,
-        "acrylic" | "frosted" => 4,
-        _ => return Err("неизвестный материал".into()),
-    };
-    let hwnd = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
-    // System backdrops stop composing custom window regions. Accent blur supports those regions.
-    let alpha = if material == "frosted" {
-        220
-    } else if material == "acrylic" {
-        145
-    } else {
-        45
-    };
-    let tint = if dark { 0x00121010 } else { 0x00f6f8f9 };
-    let mut policy = AccentPolicy {
-        state,
-        flags: 0,
-        color: (alpha << 24) | tint,
-        animation: 0,
-    };
-    let mut data = CompositionData {
-        attribute: 19,
-        data: &mut policy as *mut _ as *mut c_void,
-        size: std::mem::size_of::<AccentPolicy>(),
-    };
-    unsafe {
-        DwmSetWindowAttribute(hwnd, 38, &1, 4);
-        let style = GetWindowLongPtrW(hwnd, -16);
-        let borderless = (style & !0x00cf0000isize) | 0x80000000u32 as isize;
-        if style != borderless {
-            SetWindowLongPtrW(hwnd, -16, borderless);
-            SetWindowPos(hwnd, 0, 0, 0, 0, 0, 0x37);
-        }
-        let address = GetProcAddress(
-            GetModuleHandleA(b"user32.dll\0".as_ptr()),
-            b"SetWindowCompositionAttribute\0".as_ptr(),
-        );
-        if address.is_null() {
-            return Err("системное размытие недоступно".into());
-        }
-        let apply: unsafe extern "system" fn(isize, *mut CompositionData) -> i32 =
-            std::mem::transmute(address);
-        if apply(hwnd, &mut data) == 0 {
-            return Err("windows не применила размытие".into());
-        }
-    }
-    Ok(())
-}
-
-fn round_window(window: &tauri::Window, radius: u32) -> Result<(), String> {
-    #[link(name = "gdi32")]
-    extern "system" {
-        fn CreateRoundRectRgn(
-            left: i32,
-            top: i32,
-            right: i32,
-            bottom: i32,
-            width: i32,
-            height: i32,
-        ) -> isize;
-        fn DeleteObject(object: isize) -> i32;
-    }
-    #[link(name = "user32")]
-    extern "system" {
-        fn SetWindowRgn(hwnd: isize, region: isize, redraw: i32) -> i32;
-    }
-    let hwnd = window.hwnd().map_err(|e| e.to_string())?;
-    let size = window.outer_size().map_err(|e| e.to_string())?;
-    let diameter =
-        (radius.min(40) as f64 * 2. * window.scale_factor().map_err(|e| e.to_string())?).round()
-            as i32;
-    unsafe {
-        let region = CreateRoundRectRgn(
-            0,
-            0,
-            size.width as i32 + 1,
-            size.height as i32 + 1,
-            diameter,
-            diameter,
-        );
-        if region == 0 {
-            return Err("не удалось округлить окно".into());
-        }
-        if SetWindowRgn(hwnd.0 as isize, region, 1) == 0 {
-            DeleteObject(region);
-            return Err("не удалось применить округлость".into());
-        }
-    }
-    Ok(())
-}
-
-#[tauri::command]
-fn set_rounding(window: tauri::Window, state: State<Catalog>, radius: u32) -> Result<(), String> {
-    state.radius.store(radius.min(40), Ordering::Relaxed);
-    round_window(&window, radius)
-}
-
 #[tauri::command]
 fn background_start() -> bool {
     std::env::args().any(|arg| arg == "--background" || arg == "--updated")
@@ -356,7 +204,7 @@ async fn open_settings(app: tauri::AppHandle) -> Result<(), String> {
         window.show().map_err(|e| e.to_string())?;
         return window.set_focus().map_err(|e| e.to_string());
     }
-    let window = tauri::WebviewWindowBuilder::new(
+    tauri::WebviewWindowBuilder::new(
         &app,
         "settings",
         tauri::WebviewUrl::App("index.html?settings".into()),
@@ -371,9 +219,8 @@ async fn open_settings(app: tauri::AppHandle) -> Result<(), String> {
     .visible(false)
     .build()
     .map_err(|e| e.to_string())?;
-    configure_frame(&window);
-    window.show().map_err(|e| e.to_string())?;
-    window.set_focus().map_err(|e| e.to_string())
+
+    Ok(())
 }
 
 fn main() {
@@ -404,7 +251,7 @@ fn main() {
         .manage(Catalog::default())
         .setup(|app| {
             let state = app.state::<Catalog>();
-            state.radius.store(16, Ordering::Relaxed);
+
             if !cfg!(debug_assertions) {
                 let enabled = app
                     .path()
@@ -471,15 +318,10 @@ fn main() {
                     }
                 })
                 .build(app)?;
-            let window = app.get_webview_window("main").unwrap();
-            configure_frame(&window);
+
             Ok(())
         })
         .on_window_event(|window, event| {
-            if matches!(event, tauri::WindowEvent::ScaleFactorChanged { .. }) {
-                let radius = window.state::<Catalog>().radius.load(Ordering::Relaxed);
-                let _ = round_window(window, radius);
-            }
             if window.label() != "main" {
                 return;
             }
@@ -507,11 +349,11 @@ fn main() {
             launch_program,
             shortcut_label,
             open_settings,
-            set_rounding,
+            frame::set_rounding,
             background_start,
             get_startup,
             set_startup,
-            set_glass,
+            frame::set_glass,
             reserve_update,
             release_update
         ])

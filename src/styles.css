@@ -11,7 +11,7 @@ button:focus-visible { outline:2px solid var(--muted); outline-offset:2px; }
 svg { width:20px; height:20px; flex-shrink:0; pointer-events:none; }
 [hidden] { display:none!important; }
 /* DWM owns the outer corners and frame; a second CSS outline caused doubled edges. */
-.glass { height:100%; background:rgb(var(--tint) / var(--density)); overflow:hidden; }
+.glass { height:100%; border-radius:var(--radius,16px); background:rgb(var(--tint) / var(--density)); overflow:hidden; }
 .solid-fallback .glass,.no-blur .glass { background:var(--solid); }
 .launcher { display:flex; flex-direction:column; }
 .searchbox { display:flex; align-items:center; gap:13px; height:56px; flex-shrink:0; padding:0 19px; }

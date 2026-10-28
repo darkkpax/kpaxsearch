@@ -2,7 +2,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { emit, listen } from '@tauri-apps/api/event';
 import { LogicalSize, getCurrentWindow } from '@tauri-apps/api/window';
 import { search, type Program } from './search';
-import { parsePreferences, preferencesKey } from './preferences';
+import { parsePreferences, preferencesKey, type Preferences } from './preferences';
 import './styles.css';
 import { check } from '@tauri-apps/plugin-updater';
 import { createUpdater } from './updater';
@@ -23,11 +23,12 @@ let theme = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dar
 async function applyGlass() {
   document.documentElement.dataset.theme = theme;
   // Acrylic supplies the blurred material; only a light tint belongs above it.
-  document.documentElement.style.setProperty('--density', String(.02 + preferences.density * .005));
+  document.documentElement.style.setProperty('--density', String(.03 + preferences.density * .002));
+  document.documentElement.style.setProperty('--radius', `${preferences.radius}px`);
   document.documentElement.classList.toggle('no-blur', !preferences.blur);
   if (!native) return;
   try {
-    await invoke('set_glass',{material:preferences.blur?preferences.material:'none',dark:theme==='dark'});
+    await invoke('set_glass',{material:preferences.blur?preferences.material:'none',dark:theme==='dark',density:preferences.density});
     await invoke('set_rounding', { radius: preferences.radius });
     document.documentElement.classList.remove('solid-fallback');
   } catch { document.documentElement.classList.add('solid-fallback'); }
@@ -39,8 +40,9 @@ async function initializeAppearance() {
     await window.setTheme(null);
     theme = await window.theme() ?? theme;
     await window.onThemeChanged(event => { theme = event.payload; void applyGlass(); });
-    await listen('appearance-changed', () => {
-      preferences = parsePreferences(read(preferencesKey));
+    await listen<Preferences>('appearance-changed', event => {
+      preferences = parsePreferences(JSON.stringify(event.payload));
+      save(preferencesKey,JSON.stringify(preferences));
       void applyGlass();
       if (!settings) render();
     });
@@ -88,7 +90,7 @@ if (settings) {
     preferences = parsePreferences(JSON.stringify({ blur: $<HTMLInputElement>('blur').checked, density: Number($<HTMLInputElement>('density').value), rows: Number($<HTMLInputElement>('rows').value),radius:Number($<HTMLInputElement>('radius').value),material:$<HTMLSelectElement>('material').value }));
     save(preferencesKey, JSON.stringify(preferences)); values();
     void applyGlass();
-    if (native) void emit('appearance-changed');
+    if (native) void emit('appearance-changed',preferences);
   });
   $('startup').addEventListener('change', async () => {
     try { await invoke('set_startup',{enabled:$<HTMLInputElement>('startup').checked}); }
@@ -108,7 +110,7 @@ if (settings) {
     finally { button.disabled = false; }
   });
   document.addEventListener('keydown', event => { if (event.key === 'Escape' && native) void getCurrentWindow().close(); });
-  void initializeAppearance().then(async () => { if (native) { $('shortcut').textContent = await invoke<string>('shortcut_label'); $('version').textContent=await getVersion(); $<HTMLInputElement>('startup').checked=await invoke<boolean>('get_startup'); $('update-status').textContent='автоматическая проверка при запуске'; } });
+  void initializeAppearance().then(async () => { if (native) { await getCurrentWindow().show();await getCurrentWindow().setFocus();$('shortcut').textContent = await invoke<string>('shortcut_label'); $('version').textContent=await getVersion(); $<HTMLInputElement>('startup').checked=await invoke<boolean>('get_startup'); $('update-status').textContent='автоматическая проверка при запуске'; } });
 } else {
   root.innerHTML = `<main class="launcher glass" aria-label="поиск программ">
     <div class="searchbox"><span class="search-icon" data-tauri-drag-region>${searchIcon}</span>
