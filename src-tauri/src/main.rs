@@ -18,7 +18,7 @@ use tauri::{Emitter, Manager, State};
 use tauri_plugin_autostart::ManagerExt as AutostartExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 struct Program {
     id: String,
     name: String,
@@ -51,12 +51,22 @@ fn shortcut_label(state: State<Catalog>) -> String {
 }
 
 #[tauri::command]
-async fn refresh_programs(app: tauri::AppHandle) -> Result<Vec<Program>, String> {
+async fn refresh_programs(
+    app: tauri::AppHandle,
+    reuse_icons: Option<bool>,
+) -> Result<Vec<Program>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         use std::os::windows::process::CommandExt;
         let state = app.state::<Catalog>();
         let _refresh = state.refresh.lock().unwrap();
-        let output = Command::new("powershell.exe")
+        let path = cache_path(&app)?;
+        let mut command = Command::new("powershell.exe");
+        if reuse_icons.unwrap_or(false) {
+            command.env("KPAX_CATALOG_CACHE", &path);
+        } else {
+            command.env_remove("KPAX_CATALOG_CACHE");
+        }
+        let output = command
             .args([
                 "-NoLogo",
                 "-NoProfile",
@@ -81,8 +91,13 @@ async fn refresh_programs(app: tauri::AppHandle) -> Result<Vec<Program>, String>
         if programs.is_empty() {
             return Err("windows вернула пустой список программ; попробуй обновить ещё раз".into());
         }
-        *state.programs.lock().unwrap() = programs.clone();
-        let path = cache_path(&app)?;
+        {
+            let mut cached = state.programs.lock().unwrap();
+            if reuse_icons.unwrap_or(false) && *cached == programs && path.is_file() {
+                return Ok(programs);
+            }
+            *cached = programs.clone();
+        }
         fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
         let temp = path.with_extension("tmp");
         fs::write(

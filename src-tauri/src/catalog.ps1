@@ -1,7 +1,19 @@
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-Add-Type -AssemblyName System.Drawing
-Add-Type @'
+$cached = @{}
+if ($env:KPAX_CATALOG_CACHE) {
+    try {
+        Get-Content -LiteralPath $env:KPAX_CATALOG_CACHE -Raw -Encoding UTF8 | ConvertFrom-Json | ForEach-Object {
+            if ($_.id -and $_.icon) { $cached[$_.id] = $_ }
+        }
+    } catch {
+        # A missing or unreadable cache just means rebuilding icons.
+    }
+}
+
+function Initialize-ProgramIcon {
+    Add-Type -AssemblyName System.Drawing
+    Add-Type @'
 using System;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -40,11 +52,24 @@ public static class ProgramIcon {
     }
 }
 '@ -ReferencedAssemblies System.Drawing
+}
+
+$iconReaderReady = $false
 $programs = @(Get-StartApps | Sort-Object AppID -Unique | Where-Object {
     $_.Name -and $_.AppID -and
     $_.AppID -notmatch '(?i)(\.(chm|url|html?|pdf|txt|rtf|docx?|xlsx?|pptx?|md)$|^(https?|file):)' -and
     $_.Name -notmatch '(?i)^(uninstall|\u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435|\u0443\u0434\u0430\u043b\u0438\u0442\u044c)\b'
 } | ForEach-Object {
-    @{ id = $_.AppID; name = $_.Name; icon = [ProgramIcon]::Read($_.AppID) }
+    $previous = $cached[$_.AppID]
+    if ($previous -and $previous.name -ceq $_.Name) {
+        $icon = $previous.icon
+    } else {
+        if (!$iconReaderReady) {
+            Initialize-ProgramIcon
+            $iconReaderReady = $true
+        }
+        $icon = [ProgramIcon]::Read($_.AppID)
+    }
+    @{ id = $_.AppID; name = $_.Name; icon = $icon }
 })
 ConvertTo-Json -InputObject $programs -Compress -Depth 3

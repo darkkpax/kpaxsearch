@@ -52,6 +52,7 @@ async function initializeAppearance() {
 }
 
 let programs: Program[] = [], results: Program[] = [], selected = 0, indexing = false, launching = false;
+let catalogTimer: ReturnType<typeof setTimeout>;
 let recent: string[] = [];
 let usage: Record<string, number> = {};
 try { const value: unknown = JSON.parse(read('kpax:recent') ?? '[]'); if (Array.isArray(value)) recent = value.filter((id): id is string => typeof id === 'string').slice(0, 50); } catch { /* discard malformed history */ }
@@ -131,14 +132,13 @@ if (settings) {
   void (async () => {
     await initializeAppearance();
     if (native) {
-      await listen('launcher-open', opened);
-      await listen<Program[]>('catalog-changed', event => { programs = event.payload; render(); });
+      await listen('launcher-open', () => opened(true));
+      await listen<Program[]>('catalog-changed', event => updatePrograms(event.payload));
       programs = await invoke<Program[]>('cached_programs');
       opened();
       const background = await invoke<boolean>('background_start') || read('kpax:background-next-start') === '1';
       save('kpax:background-next-start','0');
       if (!background) { await getCurrentWindow().show(); await getCurrentWindow().setFocus(); input.focus(); }
-      void refresh();
       // One background check at startup; a sleeping/offline computer keeps its current version.
       setTimeout(() => { const updater=createUpdater(check,text=>{if(text.startsWith('не удалось'))save('kpax:background-next-start','0');},()=>save('kpax:background-next-start','1'),updateGate); void updater(); },5000);
     } else opened();
@@ -199,13 +199,44 @@ async function launch() {
 
 async function refresh() {
   if (indexing || !native) return;
-  indexing = true; render();
-  try { programs = await invoke<Program[]>('refresh_programs'); }
-  catch (error) { $('status').textContent = String(error); if (!programs.length) $<HTMLInputElement>('query').placeholder = 'не удалось получить программы'; }
-  finally { indexing = false; if (programs.length) $<HTMLInputElement>('query').placeholder = 'что открыть?'; render(); }
+  indexing = true;
+  const input = $<HTMLInputElement>('query');
+  if (!programs.length) input.placeholder = 'ищем программы…';
+  try {
+    const list = await invoke<Program[]>('refresh_programs', { reuseIcons: true });
+    if (input.placeholder === 'ищем программы…') input.placeholder = 'что открыть?';
+    updatePrograms(list);
+  }
+  catch (error) { $('status').textContent = String(error); if (!programs.length) input.placeholder = 'не удалось получить программы'; }
+  finally { indexing = false; }
 }
 
-function opened() {
+function updatePrograms(list: Program[]) {
+  if (list.length === programs.length && list.every(({ id, name, icon }, index) => {
+    const previous = programs[index];
+    return id === previous.id && name === previous.name && icon === previous.icon;
+  })) return;
+  const selectedId = results[selected]?.id;
+  programs = list;
+  render();
+  if (selectedId) choose(results.findIndex(program => program.id === selectedId));
+}
+
+function scheduleCatalogCheck(retry = false) {
+  clearTimeout(catalogTimer);
+  catalogTimer = setTimeout(async () => {
+    const visible = await getCurrentWindow().isVisible();
+    if (visible || retry) void refresh();
+    if (visible) scheduleCatalogCheck();
+  }, 5000);
+}
+
+function opened(retryCatalog = false) {
   const input = $<HTMLInputElement>('query'); input.value = ''; input.placeholder = 'что открыть?'; input.removeAttribute('aria-invalid'); render(); input.focus();
   const panel = document.querySelector<HTMLElement>('.launcher')!; panel.classList.remove('opening'); void panel.offsetWidth; panel.classList.add('opening');
+  if (native) {
+    void refresh();
+    // Windows may still be registering a shortcut when the launcher is opened.
+    scheduleCatalogCheck(retryCatalog);
+  }
 }
