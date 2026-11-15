@@ -5,8 +5,25 @@ use std::{
 };
 
 const SUBCLASS_ID: usize = 0x4b504158;
+const WM_WINDOWPOSCHANGED: u32 = 0x0047;
+const WM_NCDESTROY: u32 = 0x0082;
+const WM_DISMISS_SEARCH: u32 = 0x8000 + 0x4b;
+const WH_MOUSE_LL: i32 = 14;
+
+thread_local! {
+    static SEARCH_MOUSE_HOOK: Cell<Option<(isize, isize)>> = const { Cell::new(None) };
+}
+
 type Proc = unsafe extern "system" fn(isize, u32, usize, isize, usize, usize) -> isize;
+type MouseProc = unsafe extern "system" fn(i32, usize, isize) -> isize;
 #[repr(C)]
+#[derive(Clone, Copy)]
+struct Point {
+    x: i32,
+    y: i32,
+}
+#[repr(C)]
+#[derive(Default)]
 struct Rect {
     left: i32,
     top: i32,
@@ -18,14 +35,24 @@ struct Frame {
     applying: Cell<bool>,
     size: Cell<(i32, i32, i32)>,
     backdrop: RefCell<Option<Backdrop>>,
+    search: std::cell::OnceCell<tauri::WebviewWindow>,
 }
 
 #[link(name = "comctl32")]
 extern "system" {
+    fn IsWindowVisible(window: isize) -> i32;
+    fn PostMessageW(window: isize, message: u32, wparam: usize, lparam: isize) -> i32;
+    fn SetWindowsHookExW(kind: i32, proc: MouseProc, module: isize, thread: u32) -> isize;
+    fn UnhookWindowsHookEx(hook: isize) -> i32;
+    fn CallNextHookEx(hook: isize, code: i32, wparam: usize, lparam: isize) -> isize;
     fn SetWindowSubclass(window: isize, proc: Proc, id: usize, data: usize) -> i32;
     fn GetWindowSubclass(window: isize, proc: Proc, id: usize, data: *mut usize) -> i32;
     fn RemoveWindowSubclass(window: isize, proc: Proc, id: usize) -> i32;
     fn DefSubclassProc(window: isize, message: u32, wparam: usize, lparam: isize) -> isize;
+}
+#[link(name = "kernel32")]
+extern "system" {
+    fn GetModuleHandleW(name: *const u16) -> isize;
 }
 #[link(name = "user32")]
 extern "system" {
@@ -54,6 +81,46 @@ fn diameter(radius: u32, dpi: u32, width: i32, height: i32) -> i32 {
         .min(width)
         .min(height)
         .max(0)
+}
+
+unsafe extern "system" fn outside_click(code: i32, message: usize, data: isize) -> isize {
+    // MSLLHOOKSTRUCT starts with the screen position of the click.
+    if code == 0 && matches!(message, 0x0201 | 0x0204 | 0x0207 | 0x020b) {
+        SEARCH_MOUSE_HOOK.with(|state| {
+            if let Some((window, _)) = state.get() {
+                let point = *(data as *const Point);
+                let mut bounds = Rect::default();
+                if GetWindowRect(window, &mut bounds) != 0
+                    && (!(bounds.left..bounds.right).contains(&point.x)
+                        || !(bounds.top..bounds.bottom).contains(&point.y))
+                {
+                    PostMessageW(window, WM_DISMISS_SEARCH, 0, 0);
+                }
+            }
+        });
+    }
+    CallNextHookEx(0, code, message, data)
+}
+
+unsafe fn watch_clicks(window: isize, visible: bool) {
+    SEARCH_MOUSE_HOOK.with(|state| match (visible, state.get()) {
+        (true, None) => {
+            let hook = SetWindowsHookExW(
+                WH_MOUSE_LL,
+                outside_click,
+                GetModuleHandleW(std::ptr::null()),
+                0,
+            );
+            if hook != 0 {
+                state.set(Some((window, hook)));
+            }
+        }
+        (false, Some((_, hook))) => {
+            state.set(None);
+            UnhookWindowsHookEx(hook);
+        }
+        _ => {}
+    });
 }
 
 unsafe fn clip(window: isize, frame: &Frame, force: bool) -> Result<(), String> {
@@ -99,14 +166,31 @@ unsafe extern "system" fn procedure(
     match message {
         0x0083 | 0x0085 => return 0,
         0x0086 => return 1,
+        WM_DISMISS_SEARCH => {
+            if let Some(search) = (*(data as *const Frame)).search.get() {
+                let search = search.clone();
+                let _ = search.hide();
+            }
+            return 0;
+        }
         _ => {}
     }
     let result = DefSubclassProc(window, message, wparam, lparam);
-    if message == 0x0082 {
+    if message == WM_NCDESTROY {
+        if (*(data as *const Frame)).search.get().is_some() {
+            watch_clicks(window, false);
+        }
         RemoveWindowSubclass(window, procedure, SUBCLASS_ID);
         drop(Box::from_raw(data as *mut Frame));
-    } else if matches!(message, 0x0005 | 0x0047 | 0x007d | 0x02e0 | 0x031a) {
-        let _ = clip(window, &*(data as *const Frame), message != 0x0005);
+    } else if matches!(
+        message,
+        0x0005 | WM_WINDOWPOSCHANGED | 0x007d | 0x02e0 | 0x031a
+    ) {
+        let frame = &*(data as *const Frame);
+        if message == WM_WINDOWPOSCHANGED && frame.search.get().is_some() {
+            watch_clicks(window, IsWindowVisible(window) != 0);
+        }
+        let _ = clip(window, frame, message != 0x0005);
     }
     result
 }
@@ -119,6 +203,7 @@ unsafe fn ensure(window: isize) -> Result<&'static Frame, String> {
             applying: Cell::new(false),
             size: Cell::new((0, 0, 0)),
             backdrop: RefCell::new(None),
+            search: std::cell::OnceCell::new(),
         })) as usize;
         if SetWindowSubclass(window, procedure, SUBCLASS_ID, data) == 0 {
             drop(Box::from_raw(data as *mut Frame));
@@ -128,6 +213,16 @@ unsafe fn ensure(window: isize) -> Result<&'static Frame, String> {
         DwmSetWindowAttribute(window, 34, &-2, 4);
     }
     Ok(&*(data as *const Frame))
+}
+
+pub fn dismiss_search_on_outside_click(window: &tauri::WebviewWindow) -> Result<(), String> {
+    let handle = window.hwnd().map_err(|e| e.to_string())?.0 as isize;
+    // Setup runs on the UI thread, which receives the mouse hook callbacks.
+    unsafe {
+        let _ = ensure(handle)?.search.set(window.clone());
+        watch_clicks(handle, IsWindowVisible(handle) != 0);
+    }
+    Ok(())
 }
 
 fn on_ui(

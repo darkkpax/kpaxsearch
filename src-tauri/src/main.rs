@@ -267,6 +267,9 @@ fn main() {
         .manage(Catalog::default())
         .setup(|app| {
             let state = app.state::<Catalog>();
+            if let Some(window) = app.get_webview_window("main") {
+                frame::dismiss_search_on_outside_click(&window)?;
+            }
 
             if !cfg!(debug_assertions) {
                 let enabled = app
